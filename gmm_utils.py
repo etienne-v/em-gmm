@@ -16,6 +16,19 @@ def generateRandomClusterData(nPoints, weights, means, covs):
     return np.array(data)
 
 
+def getInitialCentroids(data):
+    import numpy as np
+    from scipy.spatial import distance
+    
+    centroid1 = np.array(data[np.random.choice(len(data), size=1),:][0])
+    distances = np.array([distance.euclidean(centroid1, point) for point in data])
+    distancesP = distances/distances.sum()
+    centroid2 = np.array(data[np.random.choice(len(data), size=1, p=distancesP)][0])
+    initCentroids = [centroid1, centroid2]
+
+    return np.array(initCentroids)
+
+    
 def calcResponsibilities(data, params):
     """
     Calculate cluster responsibilities for each data point for the given cluster parameters.
@@ -39,68 +52,6 @@ def calcResponsibilities(data, params):
     return np.array(resp)
 
 
-# plot data and probability contours for clusters
-def plotDataContours(data, params, trueParams, figTitle='', save=False, fileName='figure'):
-    """
-    Plot data points and overlay contour lines of estimated clusters for the given cluster parameters.
-    """
-    import numpy as np
-    import matplotlib.pyplot as plt
-    import matplotlib.mlab as mlab
-
-    weights = params['weights']
-    means = params['means']
-    covs = params['covs']
-    
-    nClusters = len(means)
-    x = np.arange(min(data[:,0]), max(data[:,0]), 0.1)
-    y = np.arange(min(data[:,1]), max(data[:,1]), 0.1)
-    X, Y = np.meshgrid(x, y)
-
-    colAr = ['red', 'blue']
-    
-    fig = plt.figure(figsize=(10,4))
-    ax1 = plt.subplot(1,2,1)
-    
-    plt.plot(data[:,0], data[:,1], color='0.5', marker='o', ls='None', mec='k')
-    plt.xlabel("X")
-    plt.ylabel("Y")
-
-    for k in np.arange(nClusters):
-        sigx = np.sqrt(covs[k][0][0])
-        sigy = np.sqrt(covs[k][1][1])
-        sigxy = covs[k][0][1]/(sigx*sigy)
-        Z = mlab.bivariate_normal(X, Y, sigmax=sigx, sigmay=sigy, mux=means[k,0], muy=means[k,1], sigmaxy=sigxy)
-        plt.contour(X, Y, Z, zorder=10, colors=colAr[k])
-        plt.title(figTitle)
-        plt.axis('scaled')
-        plt.tight_layout()
-
-    ax2 = plt.subplot(1,2,2)
-    plt.axis('off')
-
-    d = 0.055
-    skip = 0.4
-    for k in np.arange(nClusters):
-        vpos = 1.0-skip*k
-        plt.text(0.0, vpos-d*0, "Cluster {:d}".format(k), transform=ax2.transAxes, va='top')
-        plt.text(0.0, vpos-d*1, "true weight:\n"+np.array_str(trueParams['weights'][k], precision=3, suppress_small=True), transform=ax2.transAxes, va='top')
-        plt.text(0.33, vpos-d*1, "true means:\n"+np.array_str(trueParams['means'][k], precision=3, suppress_small=True), transform=ax2.transAxes, va='top')
-        plt.text(0.66, vpos-d*1, "true cov:\n", transform=ax2.transAxes, va='top')
-        plt.text(0.66, vpos-d*2, np.array_str(trueParams['covs'][k], precision=3, suppress_small=True), transform=ax2.transAxes, va='top')
-
-        plt.text(0.0, vpos-d*4, "current weight:\n"+np.array_str(np.round(weights[k], 3), precision=3, suppress_small=True), transform=ax2.transAxes, va='top', color=colAr[k])
-        plt.text(0.33, vpos-d*4, "current means:\n"+np.array_str(means[k], precision=3, suppress_small=True), transform=ax2.transAxes, va='top', color=colAr[k])
-        plt.text(0.66, vpos-d*4, "current cov:\n", transform=ax2.transAxes, va='top', color=colAr[k])
-        plt.text(0.66, vpos-d*5, np.array_str(covs[k], precision=3, suppress_small=True), transform=ax2.transAxes, va='top', color=colAr[k])
-
-    
-    if save:
-        plt.savefig(fileName+'.pdf', format='pdf', bbox_inches='tight')
-
-    plt.show()
-    
-
 def maximizeLikelihood(data, resp):
     """
     Maximize the likelihood over the cluster parameters given the current responsibilities.
@@ -117,34 +68,98 @@ def maximizeLikelihood(data, resp):
     piHat = np.array(nkSoft/nDataResp)
 
     # calculate means
-    muHat = []
+    muHat = np.zeros((nClusters, nDim))
     for k in np.arange(nClusters):
         summation = 0
         for i in np.arange(nData):
             summation += resp[i,k]*data[i]
-        muHat.append( 1.0/nkSoft[k]*summation )
-    muHat = np.array(muHat)
+        muHat[k,:] = 1.0/nkSoft[k]*summation
 
     # calculate covariances
-    sigmaHat = []
+    sigmaHat = np.zeros((nClusters, nDim, nDim))
     for k in np.arange(nClusters):
         summation = 0
         for i in np.arange(nData):
             summation += resp[i,k]*np.outer(data[i]-muHat[k], (data[i]-muHat[k]).T)
-        sigmaHat.append( 1.0/nkSoft[k]*summation )
-    sigmaHat = np.array(sigmaHat)
+        sigmaHat[k,:,:] = 1.0/nkSoft[k]*summation
     
     parameters = {'weights':piHat, 'means':muHat, 'covs':sigmaHat}
     
     return parameters
 
 
-def gmm_em(data, params, trueParams, maxSteps=20):
+
+# plot data and probability contours for clusters
+def plotDataContours(data, params, trueParams, fig, ax1, ax2, figTitle='', save=False, fileName='figure'):
+    """
+    Plot data points and overlay contour lines of estimated clusters for the given cluster parameters.
+    """
+    import numpy as np
+    import time
+    import matplotlib.pyplot as plt
+    import matplotlib.mlab as mlab
+    from IPython import display
+
+    weights = params['weights']
+    means = params['means']
+    covs = params['covs']
+    
+    nClusters = len(means)
+    x = np.arange(min(data[:,0]), max(data[:,0]), 0.1)
+    y = np.arange(min(data[:,1]), max(data[:,1]), 0.1)
+    X, Y = np.meshgrid(x, y)
+
+    colAr = ['red', 'blue']
+
+    ax1.clear()
+    ax2.clear()
+    
+    ax1.plot(data[:,0], data[:,1], color='0.5', marker='o', ls='None', mec='k')
+    ax1.set_xlabel("X")
+    ax1.set_ylabel("Y")
+
+    for k in np.arange(nClusters):
+        sigx = np.sqrt(covs[k][0][0])
+        sigy = np.sqrt(covs[k][1][1])
+        sigxy = covs[k][0][1]/(sigx*sigy)
+        Z = mlab.bivariate_normal(X, Y, sigmax=sigx, sigmay=sigy, mux=means[k,0], muy=means[k,1], sigmaxy=sigxy)
+        ax1.contour(X, Y, Z, zorder=10, colors=colAr[k])
+        ax1.set_title(figTitle)
+        ax1.axis('scaled')
+        plt.tight_layout()
+
+    ax2.axis('off')
+
+    d = 0.055
+    skip = 0.4
+    for k in np.arange(nClusters):
+        vpos = 1.0-skip*k
+        ax2.text(0.0, vpos-d*0, "Cluster {:d}".format(k), transform=ax2.transAxes, va='top')
+        ax2.text(0.0, vpos-d*1, "true weight:\n"+np.array_str(trueParams['weights'][k], precision=3, suppress_small=True), transform=ax2.transAxes, va='top')
+        ax2.text(0.35, vpos-d*1, "true means:\n"+np.array_str(trueParams['means'][k], precision=3, suppress_small=True), transform=ax2.transAxes, va='top')
+        ax2.text(0.72, vpos-d*1, "true cov:\n", transform=ax2.transAxes, va='top')
+        ax2.text(0.72, vpos-d*2, np.array_str(trueParams['covs'][k], precision=3, suppress_small=True), transform=ax2.transAxes, va='top')
+
+        ax2.text(0.0, vpos-d*4, "current weight:\n"+np.array_str(np.round(weights[k], 3), precision=3, suppress_small=True), transform=ax2.transAxes, va='top', color=colAr[k])
+        ax2.text(0.35, vpos-d*4, "current means:\n"+np.array_str(means[k], precision=3, suppress_small=True), transform=ax2.transAxes, va='top', color=colAr[k])
+        ax2.text(0.72, vpos-d*4, "current cov:\n", transform=ax2.transAxes, va='top', color=colAr[k])
+        ax2.text(0.72, vpos-d*5, np.array_str(covs[k], precision=3, suppress_small=True), transform=ax2.transAxes, va='top', color=colAr[k])
+
+    
+    if save:
+        plt.savefig(fileName+'.pdf', format='pdf', bbox_inches='tight')
+
+    display.clear_output(wait=True)
+    display.display(fig)
+    time.sleep(0.1)
+
+    
+def gmm_em(data, params, trueParams, maxSteps=20, visualize=True):
     """
     Run expectation maximization algorithm for fitting a Gaussian mixture model to clusters of data.
     """
     import numpy as np
-    import time
+    import matplotlib.pyplot as plt
     from gmm_utils import plotDataContours, calcResponsibilities, maximizeLikelihood
 
     # initialize parameters
@@ -152,11 +167,18 @@ def gmm_em(data, params, trueParams, maxSteps=20):
     means = params['means']
     covs = params['covs']
     resp = []
-    
+
+    if visualize:
+        fig = plt.figure(0, figsize=(10,4))
+        ax1 = fig.add_subplot(1,2,1)
+        ax2 = fig.add_subplot(1,2,2)
+        plt.ion()
+
     for step in np.arange(maxSteps):
 
         # plot data and contour lines with current cluster parameters
-        plotDataContours(data, params, trueParams, figTitle="Step {:d}".format(step), save=True, fileName="figures/em_{:d}".format(step))
+        if visualize:
+            plotDataContours(data, params, trueParams, fig, ax1, ax2, figTitle="Step {:d}".format(step), save=True, fileName="figures/em_{:d}".format(step))
 
         # calculate responsibilities with current cluster parameters
         resp = calcResponsibilities(data, params)
@@ -164,7 +186,7 @@ def gmm_em(data, params, trueParams, maxSteps=20):
         # maximize likelihood over cluster parameters with current responsibilities
         params = maximizeLikelihood(data, resp)
 
-    plotDataContours(data, params, trueParams, figTitle="Step {:d}".format(step))
+    plotDataContours(data, params, trueParams, fig, ax1, ax2, figTitle="Step {:d}".format(step), save=True, fileName="figures/em_{:d}".format(step))
     
     return params
 
